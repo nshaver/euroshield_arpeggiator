@@ -22,7 +22,11 @@ Instructions:
 3. Connect MIDI out from the Euroshield to MIDI in on a sound module
 4. press the Eurosheild button to cycle through the arpeggiator state (off, non-latched, latched)
 5. with arp in non-latched or latched mode, play a chord on the keyboard on the MIDI channel defined below in the variable midi_channel
-6. use the top Euroshield potentiometer to modify the direction (up, up+down, up+down with repeat at top/bottom)
+6. use the top Euroshield potentiometer to modify the direction:
+     - 0=up
+     - 1=up+down, no repeat at top/bottom, for Stranger Things theme: C2 E2 G2 B3 C3
+     - 2=up+down with repeat at top/bottom
+     - 3=follow note played order, for Pink Floyd On The Run: E2 G2 A2 G2 D3 C3 D3 E3
 7. use the bottom Euroshield potentiometer to modify whether or not to release the previous arp note before or after the next note is played.
    this feature is important if you want to use portamento. for portamento to work the note needs to be released AFTER the next note is played.
    if your monosynth doesn't seem to be sustaining notes, try modifying this setting. the notes might be decaying because your decay/sustain
@@ -115,7 +119,7 @@ int led_pins[] = {6, 5, 4, 3};											// pins of the four euroshield LEDs
 int arp_notes[]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};	// keeps track of notes in arpeggio chord
 int held_notes[127]={};															// keeps track of notes that are currently pressed
 int arp_state=0;																		// arpeggiator state: 0=off, 1=nonlatched, 2=latched
-int arp_direction=1;   															// arpeggiator direction: 0=up, 1=updown, 2=updown with repeat at end
+int arp_direction=1;   															// arpeggiator direction: 0=up, 1=updown, 2=updown with repeat at end, 3=follow
 int arp_incr_decr=1;																// for updown direction, keeps up with current direction (up or down)
 bool arp_release_before_play=false;									// keeps up with whether to release notes before or after next note is played.
 																										// this is very important if portamento is desired. for portamento to work, the
@@ -329,6 +333,19 @@ void loop() {
 						}
 					}
 				}
+			} else if (arp_direction==3){
+				// forward
+				if (current_arpnote>=(sizeof(arp_notes)/sizeof(arp_notes[0]))) {
+					// start over at first note
+					current_arpnote=0;
+				} else {
+					if (arp_notes[current_arpnote+1]==0){
+						// on last note, restart at first note
+						current_arpnote=0;
+					} else {
+						current_arpnote++;
+					}
+				}
 			}
 
 			// release last note before playing new note
@@ -385,7 +402,11 @@ void NoteOnHandler(byte channel, byte pitch, byte velocity) {
 			if (arp_notes[i]==0){
 				// this spot is available
 				arp_notes[i]=pitch;
-				resort_arp_notes();
+				if (arp_direction==3){
+					reorder_arp_notes();
+				} else {
+					resort_arp_notes();
+				}
 				break;
 			} else if (arp_notes[i]==pitch){
 				// this note is already in arp_notes, ignore
@@ -417,7 +438,11 @@ void NoteOnHandler(byte channel, byte pitch, byte velocity) {
 			if (arp_notes[i]==0){
 				// this spot is available
 				arp_notes[i]=pitch;
-				resort_arp_notes();
+				if (arp_direction==3){
+					reorder_arp_notes();
+				} else {
+					resort_arp_notes();
+				}
 				break;
 			} else if (arp_notes[i]==pitch){
 				// this note is already in arp_notes, ignore
@@ -559,15 +584,18 @@ void get_pot(int whichpot){
 }
 
 void set_arp_direction(int potvalue){
-	if (potvalue<=400 && arp_direction!=0){
+	if (potvalue<=300 && arp_direction!=0){
 		arp_direction=0;
 		DEBUG_PRINT(String("arp_direction=up"));
-	} else if (potvalue>400 && potvalue<800 && arp_direction!=1){
+	} else if (potvalue>300 && potvalue<500 && arp_direction!=1){
 		arp_direction=1;
 		DEBUG_PRINT(String("arp_direction=up/down"));
-	} else if (potvalue>=800 && arp_direction!=2){
+	} else if (potvalue>500 && potvalue<800 && arp_direction!=2){
 		arp_direction=2;
 		DEBUG_PRINT(String("arp_direction=up/down with repeat"));
+	} else if (potvalue>=800 && arp_direction!=3){
+		arp_direction=3;
+		DEBUG_PRINT(String("arp_direction=follow"));
 	}
 }
 
