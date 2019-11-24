@@ -27,6 +27,32 @@ Instructions:
    this feature is important if you want to use portamento. for portamento to work the note needs to be released AFTER the next note is played.
    if your monosynth doesn't seem to be sustaining notes, try modifying this setting. the notes might be decaying because your decay/sustain
    are in effect because the new notes are being considered as part of the old notes (release is after the next note is played).
+8. use hardcoded variable tempo_mode to set whether tempo is from hard-coded tempo_ms variable, or from CV trigger into audio input 1.
+
+   to use hardcoded tempo, find and set the following variables:
+     - tempo_mode=0
+	   - tempo_ms=125 where 125=ms between arp beats
+
+   to use CV input, find and set the following variables:
+     - tempo_mode=1 - sets CV input mode
+     - cv_trigger_rise_level - sets minimum threshold (probably somewhere around 0.4 or 0.5)
+     - cv_trigger_fall_level - sets level for assuming trigger has fallen (somewhere around 0.3)
+     - cv_trigger_delay_ms - sets minimum ms between triggers. I was getting false triggers so I created this variable/logic
+
+   if using CV trigger input, adjust those last three variables to accommodate your CV input level. It's a little tricky because we're
+   using an audio library to analyze the input level, rather than simply reading an input voltage. I don't know of another way to read the
+   voltage via a Euroshield DAC audio input. to find the correct value, turn on serial debugging (uncomment the define DEBUG line below) and
+   watch the serial log to see what level is triggering the input, and how many ms in between triggers.
+
+	 if the triggering isn't working well, just keep at it. it can work perfectly once you get the rise and fall and delay variables set right
+   for whatever you're using for your trigger. My values are from a eurorack clock module I built that uses a Teensy 3.2 and it's simply doing
+   a digitalWrite HIGH and LOW for the trigger on/off.
+
+   if you want to get fancy, you could control the tempo from the lower pot rather than controlling the release-before/after variable. That
+   ought to be very easy to code up. I have no intention of doing that, but I would if someone really wanted it and bought me a beer somehow.
+   for a few beers I'd code up a way to use the button to select the variable, a pot to adjust that variable, and an LED to flash x times
+   indicating which variable you're currently adjusting. That would allow for setting lots of variables via the very limited controls on
+   the Euroshield.
 */
 
 // uncomment the next line to turn on serial debugging
@@ -38,6 +64,9 @@ Instructions:
 	#define DEBUG_PRINT(x)
 #endif
 
+#include <Audio.h>
+#include <Wire.h>
+#include <SPI.h>
 #include <MIDI.h>
 
 ////////////////////////////////////////
@@ -64,6 +93,20 @@ byte midi_channel=1;																// midi channel on which to listen and send 
 ////////////////////////////////////////
 
 ////////////////////////////////////////
+// CV input for tempo
+AudioInputI2S            i2s1;											// setup audio input
+AudioAnalyzePeak         peak1;											// analyze amplitude to detect CV high/low
+AudioConnection          patchCord11(i2s1, 0, peak1, 0);
+AudioControlSGTL5000     sgtl5000_1;
+
+int last_trigger_1=0;
+float cv_trigger_rise_level=0.40;										// sets minimum threshold (probably somewhere around 0.4 or 0.5)
+float cv_trigger_fall_level=0.30;										// sets level for assuming trigger has fallen (somewhere around 0.3)
+unsigned long cv_trigger_delay_ms=100;							// sets minimum ms between triggers. I was getting false triggers so I created this variable/logic
+////////////////////////////////////////
+
+// GUItool: end automatically generated code
+////////////////////////////////////////
 // leds
 int led_pins[] = {6, 5, 4, 3};											// pins of the four euroshield LEDs
 ////////////////////////////////////////
@@ -86,12 +129,19 @@ unsigned long tempo_ms=125;													// current tempo, should be enhanced to 
 																										// might also consider a variable to set whether to play on 16th notes, 8th notes, etc...
 unsigned long next_beat_ms=0;												// keeps up with when the next beat will arrive
 byte last_arpnote=0;																// keeps up with the last note that was played
+int tempo_mode=1;																		// how to control tempo: 0=hardcoded via tempo_ms, 1=CV trigger input
 ////////////////////////////////////////
 
 void setup() {
 #ifdef DEBUG
   Serial.begin(57600);
 #endif
+
+	// setup audio in for CV trigger
+  AudioMemory(12);
+  sgtl5000_1.enable();
+  sgtl5000_1.inputSelect(AUDIO_INPUT_LINEIN);
+  sgtl5000_1.lineInLevel(0,0);
 
 	// setup leds
   for (int i=0; i<(sizeof(led_pins)/sizeof(led_pins[0])); i++) pinMode(led_pins[i], OUTPUT);
@@ -110,9 +160,45 @@ void setup() {
 
 void loop() {
 	last_loop_ms=millis();
-	if (next_beat_ms<=last_loop_ms){
+
+	bool trigger_arp_now=false;
+	if (tempo_mode==0){
+		if (next_beat_ms<=last_loop_ms){
+			trigger_arp_now=true;
+		}
+	} else if (tempo_mode==1){
+		if (peak1.available()) {
+			float peak_value_1 = peak1.read();
+			//DEBUG_PRINT(String("input1 peak: ") + peak_value_1);
+			if (peak_value_1>cv_trigger_rise_level && last_trigger_1==0 && next_beat_ms<=last_loop_ms){
+				// just went high
+				DEBUG_PRINT(String("trigger on, input1 freq: ") + peak_value_1);
+				last_trigger_1=1;
+
+				// blink LED
+				digitalWrite(led_pins[2], HIGH);
+
+				// step to next arp note
+				trigger_arp_now=true;
+			} else if (peak_value_1<cv_trigger_fall_level && last_trigger_1==1){
+				// just went low
+				DEBUG_PRINT(String("trigger off, input1 freq: ") + peak_value_1);
+				last_trigger_1=0;
+
+				// unblink LED
+				digitalWrite(led_pins[2], LOW);
+			}
+		}
+	}
+
+	if (trigger_arp_now){
 		// time for another arp note
-		next_beat_ms=last_loop_ms+tempo_ms;
+		if (tempo_mode==0){
+			next_beat_ms=last_loop_ms+tempo_ms;
+		} else if (tempo_mode==1){
+			// ignore false readings from CV input, expect at least x ms between clicks
+			next_beat_ms=last_loop_ms+cv_trigger_delay_ms;
+		}
 
 		if (arp_state>0){
 			// determine next arpnote
@@ -400,6 +486,7 @@ void detect_button(){
 	// detect button pushes
 	debouncer.update();
 	if (debouncer.fell()){
+		int last_arp_state=arp_state;
 		arp_state++;
 		if (arp_state>2) arp_state=0;
 		if (arp_state==1){
@@ -411,7 +498,11 @@ void detect_button(){
 			// arp on, latch
   		digitalWrite(led_pins[0], HIGH);
   		digitalWrite(led_pins[1], HIGH);
-			all_notes_off(1);
+			if (last_arp_state==1){
+				// do not stop current chord if already playing from non-latched mode
+			} else {
+				all_notes_off(1);
+			}
 		} else {
 			// arp off
   		digitalWrite(led_pins[0], LOW);
