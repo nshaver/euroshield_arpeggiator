@@ -65,8 +65,6 @@ Instructions:
 #endif
 
 #include <Audio.h>
-#include <Wire.h>
-#include <SPI.h>
 #include <MIDI.h>
 
 ////////////////////////////////////////
