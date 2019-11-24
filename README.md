@@ -12,7 +12,11 @@ Instructions:
 
 5. with arp in non-latched or latched mode, play a chord on the keyboard on the MIDI channel defined below in the variable midi_channel
 
-6. use the top Euroshield potentiometer to modify the direction (up, up+down, up+down with repeat at top/bottom)
+6. use the top Euroshield potentiometer to modify the direction:
+     - 0=up
+     - 1=up+down, no repeat at top/bottom, for Stranger Things theme: C2 E2 G2 B3 C3
+     - 2=up+down with repeat at top/bottom
+     - 3=follow note played order, for Pink Floyd On The Run: E2 G2 A2 G2 D3 C3 D3 E3
 
 7. use the bottom Euroshield potentiometer to modify whether or not to release the previous arp note before or after the next note is played.
 
