@@ -125,11 +125,12 @@ bool arp_release_before_play=false;									// keeps up with whether to release 
 																										// this is very important if portamento is desired. for portamento to work, the
 																										// notes will need to be released after the next note is played, rather than before.
 int current_arpnote=0;															// stores current arp
-unsigned long last_loop_ms=0;												// keeps up with exactly when the current loop started
-unsigned long tempo_ms=125;													// current tempo, should be enhanced to function via MIDI clock, potentiomenter,
+unsigned long this_loop_ms=0;												// keeps up with exactly when the current loop started
+unsigned long tempo_ms=0;														// current tempo, should be enhanced to function via MIDI clock, potentiomenter,
 																										// CV trigger in, tap temop, etc...
 																										// might also consider a variable to set whether to play on 16th notes, 8th notes, etc...
 unsigned long next_beat_ms=0;												// keeps up with when the next beat will arrive
+unsigned long last_beat_ms=0;												// keeps up with when the last beat time
 byte last_arpnote=0;																// keeps up with the last note that was played
 int tempo_mode=1;																		// how to control tempo: 0=hardcoded via tempo_ms, 1=CV trigger input
 ////////////////////////////////////////
@@ -158,22 +159,34 @@ void setup() {
 	// setup debounced button
 	debouncer.attach(BUTTON_PIN, INPUT_PULLUP);
 	debouncer.interval(25);
+
+	if (tempo_mode==0){
+		tempo_ms=125;
+	}
 }
 
 void loop() {
-	last_loop_ms=millis();
+	this_loop_ms=millis();
 
 	bool trigger_arp_now=false;
 	if (tempo_mode==0){
-		if (next_beat_ms<=last_loop_ms){
+		if (next_beat_ms<=this_loop_ms){
 			trigger_arp_now=true;
 		}
 	} else if (tempo_mode==1){
 		if (peak1.available()) {
 			float peak_value_1 = peak1.read();
 			//DEBUG_PRINT(String("input1 peak: ") + peak_value_1);
-			if (peak_value_1>cv_trigger_rise_level && last_trigger_1==0 && next_beat_ms<=last_loop_ms){
+			if (peak_value_1>cv_trigger_rise_level && last_trigger_1==0 && next_beat_ms<=this_loop_ms){
 				// just went high
+				if (last_beat_ms>0){
+					// attempt to calculate tempo based on 1 CV click = 8th note, 2 arp notes per 8th note
+					tempo_ms=(this_loop_ms-last_beat_ms)/2;
+					DEBUG_PRINT(String("tempo: ") + tempo_ms);
+				}
+
+				last_beat_ms=this_loop_ms;
+
 				DEBUG_PRINT(String("trigger on, input1 freq: ") + peak_value_1);
 				last_trigger_1=1;
 
@@ -182,6 +195,8 @@ void loop() {
 
 				// step to next arp note
 				trigger_arp_now=true;
+
+				next_beat_ms=this_loop_ms+cv_trigger_delay_ms;
 			} else if (peak_value_1<cv_trigger_fall_level && last_trigger_1==1){
 				// just went low
 				DEBUG_PRINT(String("trigger off, input1 freq: ") + peak_value_1);
@@ -191,15 +206,20 @@ void loop() {
 				digitalWrite(led_pins[2], LOW);
 			}
 		}
+
+		if (tempo_ms>0 && this_loop_ms>=(last_beat_ms+tempo_ms)){
+			// trigger now for half beat trigger
+			trigger_arp_now=true;
+			tempo_ms=0;
+		}
 	}
 
 	if (trigger_arp_now){
 		// time for another arp note
 		if (tempo_mode==0){
-			next_beat_ms=last_loop_ms+tempo_ms;
+			next_beat_ms=this_loop_ms+tempo_ms;
 		} else if (tempo_mode==1){
 			// ignore false readings from CV input, expect at least x ms between clicks
-			next_beat_ms=last_loop_ms+cv_trigger_delay_ms;
 		}
 
 		if (arp_state>0){
@@ -350,7 +370,7 @@ void loop() {
 
 			// release last note before playing new note
 			byte arp_release_note=last_arpnote;
-			if (arp_release_note>0 && arp_release_before_play){
+			if (arp_release_note>0 && (arp_release_before_play || arp_release_note==arp_notes[current_arpnote])){
 				MIDI.sendNoteOff(arp_release_note, 0, midi_channel);
 			}
 
@@ -365,7 +385,7 @@ void loop() {
 			}
 
 			// release last note after playing new note
-			if (arp_release_note>0 && arp_release_before_play==false){
+			if (arp_release_note>0 && (arp_release_before_play==false && arp_release_note!=arp_notes[current_arpnote])){
 				MIDI.sendNoteOff(arp_release_note, 0, midi_channel);
 			}
 		}
@@ -376,12 +396,12 @@ void loop() {
 	}
 	detect_button();
 
-	if (last_loop_ms>=pot_read_ms){
+	if (this_loop_ms>=pot_read_ms){
 		get_pot(0);
 		get_pot(1);
 
 		// only read pots every 250ms
-		pot_read_ms=last_loop_ms+250;
+		pot_read_ms=this_loop_ms+250;
 	}
 }
 
